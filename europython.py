@@ -49,7 +49,7 @@ class MIDIOut(threading.Thread):
         self.connected = False
         self.port = port
         self.start()
-    
+
     def send(self, message: mido.Message) -> None:
         self.queue.put_nowait(message)
 
@@ -80,6 +80,10 @@ class Clock(threading.Thread):
         self.on_bar = threading.Event()
         self.countdown_lock = threading.Lock()
         self.countdowns = []
+        self.board = bytearray(b"\x00\x20\x29\x02\x10\x0A" + (b"\x00" * 128))
+        for pad_index in range(64):
+            pad_coord = self.index_to_pad(pad_index + 1)
+            self.board[6 + 2 * pad_index] = pad_coord
         self.reset()
 
     def reset(self):
@@ -89,6 +93,8 @@ class Clock(threading.Thread):
         self.position = -1  # pulses since last start
         self.beat = -1
         self.bar = -1
+        for pad_index in range(64):
+            self.board[6 + 2 * pad_index + 1] = pad_index
         with self.countdown_lock:
             for countdown in self.countdowns:
                 countdown.set()
@@ -101,8 +107,8 @@ class Clock(threading.Thread):
         input = portmidi.open_input(CLOCK_PORT)
         self.connected = True
 
-        launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0E\x00"))
         launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x01"))
+        launchpad.send(SysEx(data=self.board))
 
         for message in input:
             if self.running and message.type == "clock":
@@ -115,10 +121,17 @@ class Clock(threading.Thread):
             elif message.type == "stop":
                 self.reset()
                 launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x01"))
-    
+
+    def pad(self, number: int, color: int) -> None:
+        self.board[6 + 2 * (number - 1) + 1] = color
+
+    def index_to_pad(self, index: int) -> int:
+        x = (index - 1) % 8
+        y = (index - 1) // 8
+        return 10 * y + x + 11
+
     def tick(self) -> None:
-        # If we refresh launchpad here, it will be 1/24 behind but this will enable
-        # all sequencers to set the state.
+        launchpad.send(SysEx(data=self.board))
 
         self.position = (self.position + 1) % 24
         if self.position == 0:
@@ -134,13 +147,13 @@ class Clock(threading.Thread):
             current_ev = self.countdowns.pop(0)
             current_ev.set()
             self.countdowns.append(threading.Event())
-        
+
     def wait(self, pulses: int) -> None:
         if pulses == 0:
             return
-        
+
         with self.countdown_lock:
-            countdown = self.countdowns[pulses-1]
+            countdown = self.countdowns[pulses - 1]
         countdown.wait()
         if not self.running:
             raise Stopped("Clock stopped while waiting")
@@ -150,27 +163,23 @@ clock = Clock()
 
 
 class Seq(threading.Thread):
-    def __init__(self, clock, number):
+    def __init__(self, number):
         super().__init__(name=f"Sequence {number}", daemon=True)
         self.number = number
-        x = (number - 1) % 8
-        y = (number - 1) // 8
-        self.pad = 10 * y + x + 11
-        self.clock = clock
         self.start()
 
     def play(self):
         for _ in range(4):
-            launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A" + self.pad.to_bytes(1) + b"\x03"))
-            self.clock.wait(6)
-            launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A" + self.pad.to_bytes(1) + b"\x40"))
-            self.clock.wait(6)
+            clock.pad(self.number, 0x03)
+            clock.wait(6)
+            clock.pad(self.number, 0x40)
+            clock.wait(6)
 
     def run(self):
-        launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A" + self.pad.to_bytes(1) + b"\x01"))
+        clock.pad(self.number, 0x01)
 
         while True:
-            self.clock.on_bar.wait()
+            clock.on_bar.wait()
             try:
                 self.play()
             except Stopped:
@@ -179,4 +188,4 @@ class Seq(threading.Thread):
 
 s = []
 for i in range(1, 65):
-    s.append(Seq(clock, i))
+    s.append(Seq(i))
