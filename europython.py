@@ -92,7 +92,7 @@ class Clock(threading.Thread):
         with self.countdown_lock:
             for countdown in self.countdowns:
                 countdown.set()
-            self.countdowns = []
+            self.countdowns = [threading.Event() for _ in range(384)]
 
     def run(self):
         portmidi = mido.Backend("mido.backends.portmidi")
@@ -131,35 +131,19 @@ class Clock(threading.Thread):
             self.on_beat.clear()
             self.on_bar.clear()
         with self.countdown_lock:
-            done_indexes = []
-            for index, countdown in enumerate(self.countdowns):
-                countdown.tick()
-                if countdown.is_set():
-                    done_indexes.append(index)
-            for index in reversed(done_indexes):
-                del self.countdowns[index]
+            current_ev = self.countdowns.pop(0)
+            current_ev.set()
+            self.countdowns.append(threading.Event())
         
     def wait(self, pulses: int) -> None:
         if pulses == 0:
             return
         
-        countdown = Countdown(pulses)
         with self.countdown_lock:
-            self.countdowns.append(countdown)
+            countdown = self.countdowns[pulses-1]
         countdown.wait()
         if not self.running:
             raise Stopped("Clock stopped while waiting")
-
-
-class Countdown(threading.Event):
-    def __init__(self, value: int) -> None:
-        super().__init__()
-        self.value = value
-
-    def tick(self) -> None:
-        self.value -= 1
-        if self.value == 0:
-            self.set()
 
 
 clock = Clock()
