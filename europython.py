@@ -34,12 +34,15 @@ os.environ["DYLD_FALLBACK_LIBRARY_PATH"] = "/opt/homebrew/lib/"
 
 import threading
 import queue
+from collections import deque
+
 
 LAUNCHPAD_PORT = "Launchpad Pro Standalone Port"
 CLOCK_PORT = "IAC aiotone"
 
 
 SysEx = functools.partial(mido.Message, "sysex")
+portmidi = mido.Backend("mido.backends.portmidi", load=True)
 
 
 class MIDIOut(threading.Thread):
@@ -51,10 +54,9 @@ class MIDIOut(threading.Thread):
         self.start()
 
     def send(self, message: mido.Message) -> None:
-        self.queue.put_nowait(message)
+        self.queue.put(message, block=False)
 
     def run(self):
-        portmidi = mido.Backend("mido.backends.portmidi")
         while self.port not in portmidi.get_output_names():
             time.sleep(1)
         output = portmidi.open_output(self.port)
@@ -63,9 +65,6 @@ class MIDIOut(threading.Thread):
         while True:
             message = self.queue.get()
             output.send(message)
-
-
-launchpad = MIDIOut(LAUNCHPAD_PORT)
 
 
 class Stopped(Exception):
@@ -79,7 +78,7 @@ class Clock(threading.Thread):
         self.on_beat = threading.Event()
         self.on_bar = threading.Event()
         self.countdown_lock = threading.Lock()
-        self.countdowns = []
+        self.countdowns = deque()
         self.board = bytearray(b"\x00\x20\x29\x02\x10\x0A" + (b"\x00" * 128))
         for pad_index in range(64):
             pad_coord = self.index_to_pad(pad_index + 1)
@@ -98,13 +97,17 @@ class Clock(threading.Thread):
         with self.countdown_lock:
             for countdown in self.countdowns:
                 countdown.set()
-            self.countdowns = [threading.Event() for _ in range(384)]
+            self.countdowns = deque(threading.Event() for _ in range(384))
 
     def run(self):
-        portmidi = mido.Backend("mido.backends.portmidi")
         while CLOCK_PORT not in portmidi.get_input_names():
             time.sleep(1)
         input = portmidi.open_input(CLOCK_PORT)
+
+        while LAUNCHPAD_PORT not in portmidi.get_output_names():
+            time.sleep(1)
+        launchpad = portmidi.open_output(LAUNCHPAD_PORT)
+
         self.connected = True
 
         launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x01"))
@@ -112,7 +115,7 @@ class Clock(threading.Thread):
 
         for message in input:
             if self.running and message.type == "clock":
-                self.tick()
+                self.tick(launchpad)
             elif message.type in {"start", "continue"}:
                 self.reset()
                 launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x36"))
@@ -130,7 +133,7 @@ class Clock(threading.Thread):
         y = (index - 1) // 8
         return 10 * y + x + 11
 
-    def tick(self) -> None:
+    def tick(self, launchpad) -> None:
         launchpad.send(SysEx(data=self.board))
 
         self.position = (self.position + 1) % 24
@@ -144,7 +147,7 @@ class Clock(threading.Thread):
             self.on_beat.clear()
             self.on_bar.clear()
         with self.countdown_lock:
-            current_ev = self.countdowns.pop(0)
+            current_ev = self.countdowns.popleft()
             current_ev.set()
             self.countdowns.append(threading.Event())
 
