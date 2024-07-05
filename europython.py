@@ -79,10 +79,13 @@ class Clock(threading.Thread):
         self.on_bar = threading.Event()
         self.countdown_lock = threading.Lock()
         self.countdowns = deque()
-        self.board = bytearray(b"\x00\x20\x29\x02\x10\x0A" + (b"\x00" * 128))
+        self.board = bytearray(b"\x00\x20\x29\x02\x10\x0A" + (b"\x00" * 130))
         for pad_index in range(64):
             pad_coord = self.index_to_pad(pad_index + 1)
             self.board[6 + 2 * pad_index] = pad_coord
+        # side LED
+        self.board[6 + 128] = 0x63
+        self.board[6 + 129] = 0x01
         self.reset()
 
     def reset(self):
@@ -110,20 +113,20 @@ class Clock(threading.Thread):
 
         self.connected = True
 
-        launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x01"))
         launchpad.send(SysEx(data=self.board))
 
         for message in input:
-            if self.running and message.type == "clock":
-                self.tick(launchpad)
+            if message.type == "clock":
+                launchpad.send(SysEx(data=self.board))
+                if self.running:
+                    self.tick()
             elif message.type in {"start", "continue"}:
                 self.reset()
-                launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x36"))
-                launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x23\x63\x35"))
                 self.running = True
             elif message.type == "stop":
                 self.reset()
-                launchpad.send(SysEx(data=b"\x00\x20\x29\x02\x10\x0A\x63\x01"))
+                self.board[6 + 129] = 0x01
+                launchpad.send(SysEx(data=self.board))
 
     def pad(self, number: int, color: int) -> None:
         self.board[6 + 2 * (number - 1) + 1] = color
@@ -133,9 +136,7 @@ class Clock(threading.Thread):
         y = (index - 1) // 8
         return 10 * y + x + 11
 
-    def tick(self, launchpad) -> None:
-        launchpad.send(SysEx(data=self.board))
-
+    def tick(self) -> None:
         self.position = (self.position + 1) % 24
         if self.position == 0:
             self.on_beat.set()
@@ -143,7 +144,12 @@ class Clock(threading.Thread):
             if self.beat == 0:
                 self.on_bar.set()
                 self.bar = (self.bar + 1) % 4
+                self.board[6 + 129] = 0x34
+            else:
+                self.board[6 + 129] = 0x35
         else:
+            if self.position == 12:
+                self.board[6 + 129] = 0x36
             self.on_beat.clear()
             self.on_bar.clear()
         with self.countdown_lock:
