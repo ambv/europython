@@ -64,7 +64,10 @@ class MIDIOut(threading.Thread):
 
         while True:
             message = self.queue.get()
-            output.send(message)
+            try:
+                output.send(message)
+            except ValueError as ve:
+                print(self.name, ve)
 
 
 class Stopped(Exception):
@@ -125,7 +128,10 @@ class Board(threading.Thread):
             self.update()
 
     def update(self):
-        self.output.send(SysEx(data=self.coords))
+        try:
+            self.output.send(SysEx(data=self.coords))
+        except ValueError as ve:
+            print(self.name, ve)
 
     def reset(self):
         self.self_update = True
@@ -280,10 +286,13 @@ class Clock(threading.Thread):
             for countdown_set in self.countdowns:
                 countdown_set.discard(index)
 
+    def is_registered(self, seq: int) -> bool:
+        return self.sequencers[seq - 1] is not None
+
     def flip(self, seq: int) -> int:
         """Returns the pad color."""
         with self.countdown_lock:
-            if self.sequencers[seq - 1] is None:
+            if not self.is_registered(seq):
                 self.register(seq)
                 return 0x30
             else:
@@ -327,7 +336,11 @@ class Seq(threading.Thread):
     def run(self):
         while True:
             try:
-                clock.board.pad(self.number, 0x33 if clock.running else 0x01)
+                if clock.running:
+                    color = 0x50 if clock.is_registered(self.number) else 0x33
+                else:
+                    color = 0x01
+                clock.board.pad(self.number, color)
                 self.wait_for_bar()
                 clock.board.pad(self.number, 0x40)
                 self.play()
