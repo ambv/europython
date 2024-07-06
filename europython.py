@@ -113,7 +113,8 @@ class Board(threading.Thread):
                 if message.velocity:
                     self.pad(index, 0x03)
                 else:
-                    self.pad(index, 0x00)
+                    # FIXME: Board shouldn't know about "clock"
+                    self.pad(index, clock.flip(index))
 
     def clock_update(self):
         self.self_update = False
@@ -151,13 +152,14 @@ class Clock(threading.Thread):
     def __init__(self) -> None:
         super().__init__(name="Clock", daemon=True)
         self.connected = False
-        self.countdown_lock = threading.Lock()
+        self.countdown_lock = threading.RLock()
         self.countdowns: deque[set[int]] = deque()
         self.bars: set[int] = set()
         self.beats: set[int] = set()
         self.board = Board()
         self.board.start()
         self.sequencers: list[threading.Event | None] = [None] * 64
+        self.events = [threading.Event() for _ in range(64)]
         self.reset()
 
     def reset(self):
@@ -167,7 +169,7 @@ class Clock(threading.Thread):
         self.bar = -1
         self.board.reset()
         with self.countdown_lock:
-            for ev in self.sequencers:
+            for ev in self.events:
                 if ev:
                     ev.set()
             self.bars = set()
@@ -207,67 +209,86 @@ class Clock(threading.Thread):
         with self.countdown_lock:
             if self.position == 0:
                 if self.beat == 0:
-                    for index in self.bars:
+                    for index in sorted(self.bars):
                         ev = self.sequencers[index]
                         if ev is not None:
                             ev.set()
-                    self.bars.clear()
-                for index in self.beats:
+                            self.bars.remove(index)
+                for index in sorted(self.beats):
                     ev = self.sequencers[index]
                     if ev is not None:
                         ev.set()
-                self.beats.clear()
+                        self.beats.remove(index)
             current_set = self.countdowns.popleft()
-            for index in current_set:  # XXX sorting: here!
+            for index in sorted(current_set):
                 ev = self.sequencers[index]
                 if ev is not None:
                     ev.set()
+                else:
+                    self.countdowns[0].add(index)
             self.countdowns.append(set())
-    
+
     def wait_for_beat(self, seq: int) -> None:
         index = seq - 1
-        ev = self.sequencers[index]
-        if ev is None:
-            return
-
+        ev = self.events[index]
         with self.countdown_lock:
             self.beats.add(index)
 
-        self.wait_for(ev)        
-    
+        self.wait_for(ev, index)
+
     def wait_for_bar(self, seq: int) -> None:
         index = seq - 1
-        ev = self.sequencers[index]
-        if ev is None:
-            return
-
+        ev = self.events[index]
         with self.countdown_lock:
             self.bars.add(index)
 
-        self.wait_for(ev)        
+        self.wait_for(ev, index)
 
     def wait(self, seq: int, pulses: int) -> None:
         if pulses == 0:
             return
 
         index = seq - 1
-        ev = self.sequencers[index]
-        if ev is None:
-            return
-
+        ev = self.events[index]
         with self.countdown_lock:
             self.countdowns[pulses - 1].add(index)
-        
-        self.wait_for(ev)
 
-    def wait_for(self, ev: threading.Event) -> None:
+        self.wait_for(ev, index)
+
+    def wait_for(self, ev: threading.Event, index: int) -> None:
         ev.wait()
         ev.clear()
         if not self.running:
             raise Stopped("Clock stopped while waiting")
+        if self.sequencers[index] is None:
+            raise Stopped("Sequencer stopped while waiting")
 
     def register(self, seq: int) -> None:
-        self.sequencers[seq - 1] = threading.Event()
+        with self.countdown_lock:
+            index = seq - 1
+            ev = self.events[index]
+            ev.clear()
+            self.sequencers[index] = ev
+
+    def unregister(self, seq: int) -> None:
+        with self.countdown_lock:
+            index = seq - 1
+            self.events[index].set()
+            self.sequencers[index] = None
+            self.bars.discard(index)
+            self.beats.discard(index)
+            for countdown_set in self.countdowns:
+                countdown_set.discard(index)
+
+    def flip(self, seq: int) -> int:
+        """Returns the pad color."""
+        with self.countdown_lock:
+            if self.sequencers[seq - 1] is None:
+                self.register(seq)
+                return 0x30
+            else:
+                self.unregister(seq)
+                return 0x33
 
 
 clock = Clock()
@@ -305,19 +326,20 @@ class Seq(threading.Thread):
 
     def run(self):
         while True:
-            clock.board.pad(self.number, 0x40 if clock.running else 0x01)
             try:
+                clock.board.pad(self.number, 0x33 if clock.running else 0x01)
                 self.wait_for_bar()
+                clock.board.pad(self.number, 0x40)
                 self.play()
             except Stopped:
                 continue
 
     def wait(self, pulses: int) -> None:
         clock.wait(self.number, pulses)
-    
+
     def wait_for_beat(self) -> None:
         clock.wait_for_beat(self.number)
-    
+
     def wait_for_bar(self) -> None:
         clock.wait_for_bar(self.number)
 
