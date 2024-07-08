@@ -168,17 +168,21 @@ class Clock(threading.Thread):
         self.events = [threading.Event() for _ in range(64)]
         self.reset()
 
-    def reset(self):
+    def reset(self, *, full=False):
         self.running = False
         self.position = -1  # pulses since last start
         self.beat = -1
         self.bar = -1
         self.board.reset()
         with self.countdown_lock:
-            for ev in self.events:
-                if ev:
+            if full:
+                for ev in self.events:
                     ev.set()
-            self.bars = set()
+                self.bars = set()
+            else:
+                for i, ev in enumerate(self.events):
+                    if i not in self.bars:
+                        ev.set()
             self.beats = set()
             self.countdowns = deque(set() for _ in range(384))
 
@@ -198,7 +202,7 @@ class Clock(threading.Thread):
                 self.reset()
                 self.running = True
             elif message.type == "stop":
-                self.reset()
+                self.reset(full=True)
 
     def tick(self) -> None:
         self.position = (self.position + 1) % 24
