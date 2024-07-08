@@ -36,6 +36,39 @@ import threading
 import queue
 from collections import deque
 
+import traceback
+
+thread_exceptions: list[str] = []
+excepthook_lock = threading.Lock()
+
+
+def gather_exceptions(args):
+    lines = traceback.format_exception(
+        args.exc_type, args.exc_value, args.exc_traceback, colorize=True
+    )
+    pre = f"\nException in {args.thread.name}:\n" if args.thread else "\n"
+    tb = pre + "".join(lines)
+    with excepthook_lock:
+        thread_exceptions.append(tb)
+
+
+def show_exceptions():
+    with excepthook_lock:
+        if thread_exceptions:
+            reader = _get_reader()
+            reader.restore()
+            for tb in thread_exceptions:
+                print(tb)
+            thread_exceptions.clear()
+            reader.scheduled_commands.append("ctrl-c")
+            reader.prepare()
+
+
+from _pyrepl.simple_interact import _get_reader
+
+_get_reader().console.pre_input_hook = show_exceptions
+threading.excepthook = gather_exceptions
+
 
 LAUNCHPAD_PORT = "Launchpad Pro Standalone Port"
 CLOCK_PORT = "IAC aiotone"
@@ -324,7 +357,7 @@ class Seq(threading.Thread):
         clock.register(number)
         self.start()
 
-    def play(self):
+    def lightshow(self):
         for _ in range(2):
             clock.board.pad(self.number, 0x03)
             self.wait(6)
@@ -336,6 +369,9 @@ class Seq(threading.Thread):
         self.wait(12)
         clock.board.pad(self.number, 0x06)
         self.wait_for_beat()
+
+    def play(self):
+        pass
 
     def run(self):
         while True:
