@@ -377,9 +377,10 @@ class Seq(threading.Thread):
         self.wait(12)
         clock.board.pad(self.number, 0x06)
         self.wait_for_beat()
+        raise Stopped
 
     def play(self):
-        pass
+        self.wait_for_beat()
 
     def run(self):
         while True:
@@ -391,7 +392,8 @@ class Seq(threading.Thread):
                 clock.board.pad(self.number, color)
                 self.wait_for_bar()
                 clock.board.pad(self.number, 0x40)
-                self.play()
+                while True:
+                    self.play()
             except Stopped:
                 if self.out is not None:
                     for note_off_str in self.hanging_notes:
