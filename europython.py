@@ -349,7 +349,10 @@ board = clock.board
 def method_on(cls_or_obj):
     def attach_method(meth):
         if not isinstance(cls_or_obj, type):
-            meth = meth.__get__(cls_or_obj, cls_or_obj.__class__)
+            meth = meth.__get__(
+                cls_or_obj,
+                cls_or_obj.__class__,
+            )
         setattr(cls_or_obj, meth.__name__, meth)
 
     return attach_method
@@ -380,6 +383,8 @@ for note in all_notes:
     for octave in range(1, 9):
         note.append(note[0] + 12 * octave)
 
+def midival(v: float) -> int:
+    return min(127, max(0, int(v)))
 
 class Seq(threading.Thread):
     def __init__(self, number):
@@ -396,15 +401,15 @@ class Seq(threading.Thread):
 
     def lightshow(self):
         for _ in range(2):
-            clock.board.pad(self.number, 0x03)
+            board.pad(self.number, 0x03)
             self.wait(6)
-            clock.board.pad(self.number, 0x40)
+            board.pad(self.number, 0x40)
             self.wait(6)
-        clock.board.pad(self.number, 0x09)
+        board.pad(self.number, 0x09)
         self.wait(12)
-        clock.board.pad(self.number, 0x40)
+        board.pad(self.number, 0x40)
         self.wait(12)
-        clock.board.pad(self.number, 0x06)
+        board.pad(self.number, 0x06)
         self.wait_for_beat()
         raise Stopped
 
@@ -418,9 +423,9 @@ class Seq(threading.Thread):
                     color = 0x50 if clock.is_registered(self.number) else 0x33
                 else:
                     color = 0x01
-                clock.board.pad(self.number, color)
+                board.pad(self.number, color)
                 self.wait_for_bar()
-                clock.board.pad(self.number, 0x40)
+                board.pad(self.number, 0x40)
                 while True:
                     self.play()
             except Stopped:
@@ -443,14 +448,14 @@ class Seq(threading.Thread):
         if t == -1:
             t = self.t
         note = note + t
-        note_on = mido.Message("note_on", note=note, velocity=v, channel=ch)
+        note_on = mido.Message("note_on", note=note, velocity=midival(v), channel=ch)
         note_off = mido.Message("note_off", note=note, velocity=0, channel=ch)
         note_off_str = str(note_off)
         self.out.send(note_on)
         self.hanging_notes.add(note_off_str)
         gate = int(pulses * g)
         rest = pulses - gate
-        self.wait(pulses)
+        self.wait(gate)
         self.out.send(note_off)
         self.hanging_notes.discard(note_off_str)
         self.wait(rest)
@@ -493,7 +498,7 @@ class Seq(threading.Thread):
     
     def cc(self, c: int, v: int) -> None:
         if self.out is not None:
-            self.out.send(mido.Message("control_change", control=c, value=v))
+            self.out.send(mido.Message("control_change", control=c, value=midival(v)))
 
     def wait(self, pulses: int) -> None:
         clock.wait(self.number, pulses)
