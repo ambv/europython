@@ -1,10 +1,10 @@
 import sys
 import os
+import random
 import re
 import datetime
 import functools
 import time
-import asyncio
 from typing import *
 from pathlib import Path
 from dataclasses import dataclass
@@ -15,17 +15,17 @@ print("Auto-imported for your convenience:")
 print(
     ", ".join(
         (
-            "asyncio",
             "dataclasses.dataclass",
             "datetime",
             "functools",
             "os",
             "pathlib.Path",
+            "random",
             "re",
             "sys",
             "time",
             "typing.*",
-            "mido",
+            "portmidi",
         )
     )
 )
@@ -78,6 +78,7 @@ SysEx = functools.partial(mido.Message, "sysex")
 NoteOn = functools.partial(mido.Message, "note_on")
 NoteOff = functools.partial(mido.Message, "note_off")
 CC = functools.partial(mido.Message, "control_change")
+
 portmidi = mido.Backend("mido.backends.portmidi", load=True)
 
 
@@ -203,6 +204,7 @@ class Clock(threading.Thread):
         self.sequencers: list[threading.Event | None] = [None] * 64
         self.events = [threading.Event() for _ in range(64)]
         self.reset()
+        self.start()
 
     def reset(self, *, full=False):
         self.running = False
@@ -353,6 +355,32 @@ def method_on(cls_or_obj):
     return attach_method
 
 
+C = [12]
+Cs = [13]
+D = [14]
+Ds = [15]
+E = [16]
+F = [17]
+Fs = [18]
+G = [19]
+Gs = [20]
+A = [21]
+As = [22]
+B = [23]
+
+Db = Cs
+Eb = Ds
+Gb = Fs
+Ab = Gs
+Bb = As
+
+all_notes = (C, Cs, D, Ds, E, F, Fs, G, Gs, A, As, B)
+
+for note in all_notes:
+    for octave in range(1, 9):
+        note.append(note[0] + 12 * octave)
+
+
 class Seq(threading.Thread):
     def __init__(self, number):
         super().__init__(name=f"Sequence {number}", daemon=True)
@@ -362,6 +390,7 @@ class Seq(threading.Thread):
         self.ch = 0  # channel
         self.v = 72  # velocity
         self.t = 0  # transpose
+        self.g = 0.5  # gate length
         clock.register(number)
         self.start()
 
@@ -402,7 +431,7 @@ class Seq(threading.Thread):
 
     # Convenience APIs
 
-    def n(self, note: int, v: int, ch: int, pulses: int, g: float) -> None:
+    def n(self, note: int, v: int, ch: int, pulses: int, g: float, t: int) -> None:
         if self.out is None:
             return
         if v == -1:
@@ -410,8 +439,10 @@ class Seq(threading.Thread):
         if ch == -1:
             ch = self.ch
         if g == -1:
-            g = 0.5
-        note = note + self.t
+            g = self.g
+        if t == -1:
+            t = self.t
+        note = note + t
         note_on = mido.Message("note_on", note=note, velocity=v, channel=ch)
         note_off = mido.Message("note_off", note=note, velocity=0, channel=ch)
         note_off_str = str(note_off)
@@ -424,29 +455,29 @@ class Seq(threading.Thread):
         self.hanging_notes.discard(note_off_str)
         self.wait(rest)
 
-    def n1(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 96, g)
+    def n1(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 96, g, t)
     
-    def n2(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 48, g)
+    def n2(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 48, g, t)
 
-    def n3(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 32, g)
+    def n3(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 32, g, t)
     
-    def n4(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 24, g)
+    def n4(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 24, g, t)
 
-    def n6(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 16, g)
+    def n6(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 16, g, t)
 
-    def n8(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 12, g)
+    def n8(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 12, g, t)
 
-    def n16(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 6, g)
+    def n16(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 6, g, t)
 
-    def n32(self, note: int, v: int = -1, ch: int = -1, g: float = -1) -> None:
-        self.n(note, v, ch, 3, g)
+    def n32(self, note: int, v: int = -1, ch: int = -1, g: float = -1, t: int = -1) -> None:
+        self.n(note, v, ch, 3, g, t)
 
     def mod(self, v: int) -> None:
         self.cc(1, v)
@@ -462,7 +493,7 @@ class Seq(threading.Thread):
     
     def cc(self, c: int, v: int) -> None:
         if self.out is not None:
-            self.out.send(mido.Message("control_change", control=1, value=v))
+            self.out.send(mido.Message("control_change", control=c, value=v))
 
     def wait(self, pulses: int) -> None:
         clock.wait(self.number, pulses)
